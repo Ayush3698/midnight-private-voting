@@ -1,0 +1,74 @@
+pragma language_version >= 0.22;
+import CompactStandardLibrary;
+
+export enum Phase { SETUP, VOTING, CLOSED }
+
+// ---------- Public ledger (everything here is visible to observers) ----------
+export ledger organizer: Bytes<32>;                       // hash of organizer key, not the key
+export ledger phase: Phase;
+export ledger voters: HistoricMerkleTree<10, Bytes<32>>;  // commitments, not identities
+export ledger nullifiers: Map<Bytes<32>, Boolean>;        // "a ballot was spent", unlinkable to voter
+export ledger yesVotes: Counter;
+export ledger noVotes: Counter;
+
+// ---------- Private inputs (never leave the user's machine) ----------
+witness localSecretKey(): Bytes<32>;
+witness getVoterPath(leaf: Bytes<32>): MerkleTreePath<10, Bytes<32>>;
+
+constructor(organizerPk: Bytes<32>) {
+  organizer = disclose(organizerPk);
+  phase = Phase.SETUP;
+}
+
+// Domain-separated hashes so the same secret can't be cross-linked.
+export circuit organizerKey(sk: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<2, Bytes<32>>>([pad(32, "pv:org:"), sk]);
+}
+export circuit voterCommitment(sk: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<2, Bytes<32>>>([pad(32, "pv:voter:"), sk]);
+}
+circuit voteNullifier(sk: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<2, Bytes<32>>>([pad(32, "pv:null:"), sk]);
+}
+
+circuit requireOrganizer(): [] {
+  assert(disclose(organizerKey(localSecretKey()) == organizer), "Only the organizer can do this");
+}
+
+export circuit registerVoter(commitment: Bytes<32>): [] {
+  requireOrganizer();
+  assert(phase == Phase.SETUP, "Registration is closed");
+  voters.insert(disclose(commitment));
+}
+
+export circuit openVoting(): [] {
+  requireOrganizer();
+  assert(phase == Phase.SETUP, "Voting already started");
+  phase = Phase.VOTING;
+}
+
+export circuit closeVoting(): [] {
+  requireOrganizer();
+  assert(phase == Phase.VOTING, "Voting is not open");
+  phase = Phase.CLOSED;
+}
+
+// The selective-disclosure core: reveals the vote + a nullifier, nothing else.
+export circuit castVote(voteYes: Boolean): [] {
+  assert(phase == Phase.VOTING, "Voting is not open");
+  const sk = localSecretKey();
+
+  // 1. Prove eligibility without revealing WHICH registered voter I am.
+  const leaf = voterCommitment(sk);
+  const path = getVoterPath(leaf);
+  const root = merkleTreePathRoot<10, Bytes<32>>(path);
+  assert(voters.checkRoot(disclose(root)), "Not an eligible voter");
+
+  // 2. One ballot per voter, without linking ballot to identity.
+  const n = voteNullifier(sk);
+  assert(!nullifiers.member(disclose(n)), "This voter already voted");
+  nullifiers.insert(disclose(n), disclose(true));
+
+  // 3. Only the tally changes publicly.
+  if (disclose(voteYes)) { yesVotes.increment(1); } else { noVotes.increment(1); }
+}
