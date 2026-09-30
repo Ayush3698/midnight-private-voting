@@ -1,0 +1,12 @@
+{
+  "name": "private-voting",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "compile": "compact compile contract/src/private-voting.compact contract/src/managed/private-voting",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": { "@midnight-ntwrk/compact-runtime": "latest" },
+  "devDependencies": { "typescript": "^5.4.0", "vitest": "^2.0.0", "@types/node": "^20.0.0" }
+}
